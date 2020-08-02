@@ -1,10 +1,9 @@
 // Many thanks to
-// https://github.com/Barakat/CVE-2019-16098
-// https://github.com/RedCursorSecurityConsulting/PPLKiller
+// https://github.com/Barakat/CVE-2019-16098 - original exploit
+// https://github.com/RedCursorSecurityConsulting/PPLKiller - multiple code snippets were re-used here
 
 #include <Windows.h>
 #include <aclapi.h>
-//#include <tlhelp32.h>
 #include <Psapi.h>
 #include <cstdio>
 #include <iostream>
