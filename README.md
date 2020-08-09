@@ -2,14 +2,34 @@
 
 UPDATED to include image load and thread creation callbacks.
 
-Enumerating and removing kernel callbacks using signed vulnerable drivers
-
 Accompanying blog post: https://br-sn.github.io/Removing-Kernel-Callbacks-Using-Signed-Drivers/
 
-WARNING: running this program might cause BSODs, run at your own risk.
+## TL:DR
 
-Vulnerable driver can be downloaded from http://download-eu2.guru3d.com/afterburner/%5BGuru3D.com%5D-MSIAfterburnerSetup462Beta2.zip
+Anti-Virus and Endpoint Detection & Response products use kernel callbacks to get visibility on system events, such as:
+- Process Creation
+- Loading Images (exe/dll)
+- Thread Creation
+- File Creation
+- Registry modification
+- Object creation
 
+Entering kernel memory as an administrator is not considered a security boundary, but how to go about it? 
+
+Drivers have free access to kernel memory to perform their tasks. Vulnerable drivers exist that allow full kernel memory read/write operations. This program is a Proof of Concept that allows for the enumeration and modification of some of these kernel callbacks using a signed, vulnerable MSI driver. This can be used to view and remove the sources of telemetry the endpoint security products use and thus lead to the blinding of these products.
+
+For now, Windows 1909/2004 is supported for the following callbacks only:
+- Loading Images
+- Thread Creation
+- Process Creation
+
+Future updates aim to include:
+- Registry modifications
+- Object creation
+- Minifilter callbacks (file creation/modification and more)
+
+
+The vulnerable driver can be downloaded from http://download-eu2.guru3d.com/afterburner/%5BGuru3D.com%5D-MSIAfterburnerSetup462Beta2.zip
 
 Lots of code re-used from:
 - https://github.com/gentilkiwi/mimikatz/
@@ -20,6 +40,8 @@ Lots of code re-used from:
 Should build fine on VS2019, build for x64 only.
 
 ## Usage instructions
+
+WARNING: running this program might cause BSODs, run at your own risk.
 
 Run elevated. 
 Arguments and examples:
