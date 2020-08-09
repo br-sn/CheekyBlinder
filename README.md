@@ -22,9 +22,10 @@ For now, Windows 1909/2004 is supported for the following callbacks only:
 - Loading Images
 - Thread Creation
 - Process Creation
+- Registry Modifications (read-only for now)
 
 Future updates aim to include:
-- Registry modifications
+- Registry modifications (write)
 - Object creation
 - Minifilter callbacks (file creation/modification and more)
 
