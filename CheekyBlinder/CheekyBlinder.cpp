@@ -302,6 +302,8 @@ struct Offsets getVersionOffsets() {
         return { 0x8b48cd0349c03345, 0xe8d78b48d90c8d48, 0xe8cd8b48f92c8d48, 0x4024448948f88b48 };
     case 2004:
         return { 0x8b48cd0349c03345, 0xe8d78b48d90c8d48, 0xe8cd8b48f92c8d48, 0x4024448948f88b48 };
+    case 2009:
+        return { 0x8b48cd0349c03345, 0xe8d78b48d90c8d48, 0xe8cd8b48f92c8d48, 0x4024448948f88b48 };
     default:
         wprintf(L"[!] Version Offsets Not Found!\n");
 
