@@ -483,9 +483,12 @@ void findprocesscallbackroutine(DWORD64 remove) {
 
 
 int main(int argc, char* argv[]) {
-    
-    if (argc < 2) {
-        printf("Usage: %s\n"
+
+    int nArgs;
+    LPWSTR *szArgList = CommandLineToArgvW(GetCommandLineW(), &nArgs);
+
+    if (nArgs < 2) {
+        printf("Usage: %ws\n"
             " /proc - List Process Creation Callbacks\n"
             " /delproc <address> - Remove Process Creation Callback\n"
             " /thread - List Thread Creation Callbacks\n"
@@ -495,7 +498,7 @@ int main(int argc, char* argv[]) {
             " /img - List Image Load Callbacks\n"
             " /delimg <address> - Remove Image Load Callback\n"
             " /reg - List Registry modification callbacks\n"
-            , argv[0]);
+            , szArgList[0]);
         return 0;
     }
     
@@ -508,42 +511,42 @@ int main(int argc, char* argv[]) {
     wcsncat_s(driverPath, driverName, sizeof(driverName) / sizeof(wchar_t));
 
 
-    if (strcmp(argv[1] + 1, "proc") == 0) {
+    if (wcscmp(szArgList[1] + 1, L"proc") == 0) {
 
         findprocesscallbackroutine(NULL);
     }
-    else if (strcmp(argv[1] + 1, "delproc") == 0 && argc == 3) {
+    else if (wcscmp(szArgList[1] + 1, L"delproc") == 0 && argc == 3) {
         DWORD64 remove;
         remove = strtoull(argv[2], NULL, 16);
         findprocesscallbackroutine((DWORD64)remove);
     }
-    else if (strcmp(argv[1] + 1, "installDriver") == 0) {
+    else if (wcscmp(szArgList[1] + 1, L"installDriver") == 0) {
         if (auto status = service_install(svcName, svcDesc, driverPath, SERVICE_KERNEL_DRIVER, SERVICE_AUTO_START, TRUE) == 0x00000005) {
             wprintf(L"[!] 0x00000005 - Access Denied - Did you run as administrator?\n");
         }
     }
-    else if (strcmp(argv[1] + 1, "uninstallDriver") == 0) {
+    else if (wcscmp(szArgList[1] + 1, L"uninstallDriver") == 0) {
         service_uninstall(svcName);
     }
-    else if (strcmp(argv[1] + 1, "img") == 0) {
+    else if (wcscmp(szArgList[1] + 1, L"img") == 0) {
         
         findimgcallbackroutine(NULL);
     }
-    else if (strcmp(argv[1] + 1, "thread") == 0) {
+    else if (wcscmp(szArgList[1] + 1, L"thread") == 0) {
         
         findthreadcallbackroutine(NULL);
     }
-    else if (strcmp(argv[1] + 1, "delthread") == 0 && argc == 3) {
+    else if (wcscmp(szArgList[1] + 1, L"delthread") == 0 && argc == 3) {
         DWORD64 remove;
         remove = strtoull(argv[2], NULL, 16);
         findthreadcallbackroutine((DWORD64)remove);
     }
-    else if (strcmp(argv[1] + 1, "delimg") == 0 && argc == 3) {
+    else if (wcscmp(szArgList[1] + 1, L"delimg") == 0 && argc == 3) {
         DWORD64 remove;
         remove = strtoull(argv[2], NULL, 16);
         findimgcallbackroutine((DWORD64)remove);
     }
-    else if (strcmp(argv[1] + 1, "reg") == 0) {
+    else if (wcscmp(szArgList[1] + 1, L"reg") == 0) {
         
         findregistrycallbackroutines(NULL);
     }
